@@ -85,15 +85,21 @@ EDGE_HOSTS = [
     h.strip()
     for h in os.environ.get(
         "EDGE_HOSTS",
-        "saas.sin.fan:443,cdn.204910.best:443,www.mfyx.cn:443,p.etime.vip:443,cdn.ctn32.us.kg:443,cf.877774.xyz:443,spring.io:443,"
-        "cf.nyanya.moe:443,www.sloomb.com:443,op.chinwa.eu.cc:443,www.leics.police.uk:443,securecircle.com:443,www.shopify.com:443,"
-        "www.carousell.sg:443,www.dbs.com.sg:443,openai.com:443,linear.app:443,www.bilibili.com:443,uspto.gov:443,www.vmware.com:443",
+        "cf.468123.xyz:2096,fn.130519.xyz:2096,eii.at:8443,cf-cname.xingpingcn.top:8443,"
+        "ali.nonull.pp.ua:2096,cloudflare.idc.rocks:2083,224322.xyz:8443,jellyfin.roddy.eu.cc:2087,"
+        "www.sofi.com:2053,www.mfyx.cn:2053,cdn.204910.best:2096,baota.us.kg:2083,"
+        "www.akasantech.com:2053,guide.for.edu.sg:443,saas.sin.fan:2083,idc.urkeji.com:443,"
+        "vps.cheng2001.top:2087,www.wuduanyun.com:8443,www.leics.police.uk:2053,auto.dolby.dpdns.org:8443,"
+        "cf.3666888.xyz:443,cdn.ctn32.us.kg:2096,api.gzcrtw.com:2087,cf.877774.xyz:443,"
+        "cf.vvhan.com:2083,cf.xreak.top:2096,saas.072159.xyz:2087,cf.itv888.cn:2083,"
+        "p.etime.vip:2083,cdn.667891.xyz:2053,cdn.7zz.cn:2083,tt.78607323.xyz:2087,"
+        "www.dbs.com.sg:2053",
     ).split(",")
     if h.strip()
 ]
 
 # 优选 API 地址配置 (支持逗号分隔多个，可配置在 GitHub Action Secret / Env 中)
-OPTIMAL_API = os.environ.get("OPTIMAL_API", "https://raw.githubusercontent.com/LancelotRar/best-cf-ips/main/best-cf-ip-scanned-top20.txt")
+OPTIMAL_API = os.environ.get("OPTIMAL_API", "")
 
 NODES_URL = os.environ.get("NODES_URL", "https://zf158338-eng.github.io/gate/nodes.txt")
 
