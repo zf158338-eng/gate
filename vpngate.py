@@ -12,8 +12,6 @@ VPN Gate SSTP 节点检测流水线 (精简版)
 """
 
 import base64
-import ipaddress
-import random
 import csv
 import io
 import json
@@ -82,39 +80,21 @@ COUNTRY_ZH = {
     "MN": "蒙古", "NP": "尼泊尔", "LK": "斯里兰卡", "MM": "缅甸",
 }
 
-# Cloudflare 官方随机优选配置 (替代第三方优选域名池)
-CF_OFFICIAL_IPS_API = os.environ.get("CF_OFFICIAL_IPS_API", "https://api.cloudflare.com/client/v4/ips")
-CF_CIDR_URL = os.environ.get(
-    "CF_CIDR_URL",
-    "https://raw.githubusercontent.com/cmliu/cmliu/main/CF-CIDR.txt",
-)
-CF_HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443]
-FALLBACK_CF_OFFICIAL_IPS_V4 = [
-    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
-    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
-    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
-    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
-]
-FALLBACK_CF_ANYCAST_CIDRS = [
-    "162.159.32.0/20", "108.162.198.0/24", "162.159.38.0/23", "172.66.0.0/22",
-    "104.16.144.0/20", "104.16.240.0/20", "104.17.16.0/20", "104.17.48.0/20",
-    "104.17.96.0/20", "104.17.112.0/20", "104.17.144.0/20", "104.17.160.0/20",
-    "104.17.176.0/20", "104.17.208.0/20", "104.18.33.0/24", "104.19.32.0/22",
-    "104.19.48.0/21", "104.19.144.0/21", "198.41.208.0/23", "104.26.0.0/20",
-    "172.67.64.0/20", "104.16.205.0/24", "104.16.218.0/24", "104.17.132.0/24",
-    "104.17.136.0/23", "104.17.138.0/24", "104.17.140.0/24", "104.18.35.0/24",
-    "104.18.38.0/23", "104.18.40.0/23", "104.18.42.0/24", "104.18.45.0/24",
-    "104.18.47.0/24", "104.19.2.0/24", "104.19.17.0/24", "104.19.39.0/24",
-    "104.19.42.0/24", "104.19.46.0/24", "104.19.57.0/24", "104.19.58.0/23",
-    "104.19.168.0/24", "104.20.30.0/24", "141.101.113.0/24", "162.159.138.0/24",
-    "162.159.148.0/24", "162.159.152.0/24", "162.159.158.0/24", "162.159.236.0/24",
-    "172.64.67.0/24", "172.64.83.0/24", "172.64.146.0/24", "172.64.150.0/23",
-    "172.64.153.0/24", "172.64.154.0/24", "172.64.156.0/24", "172.64.159.0/24",
-    "172.64.229.0/24", "172.66.129.0/24", "172.66.208.0/24", "172.66.214.0/24",
-    "172.67.154.0/24", "172.67.156.0/24", "172.67.163.0/24", "172.67.251.0/24",
+# 静态优选域名池
+EDGE_HOSTS = [
+    h.strip()
+    for h in os.environ.get(
+        "EDGE_HOSTS",
+        "cf-cname.xingpingcn.top:443,www.wto.org:2096,www.dbs.com.sg:443,serviceshub.samsclub.com:2083,cf.vvhan.com:8443,"
+        "cf.nyanya.moe:2087,www.leics.police.uk:2053,baota.us.kg:443,www.sage.com:2083,store.ubi.com:443,www.sloomb.com:2087,"
+        "cf.xreak.top:443,www.giannidelprete.it:2053,saas.072159.xyz:443,bbs.alipansou.com:443,tt.78607323.xyz:2096,"
+        "api.gzcrtw.com:2087,ali.nonull.pp.ua:443,p.etime.vip:2087,cdn.204910.best:2087,openai.com:2096,www.bis.gov:8443,"
+        "vps.cheng2001.top:8443"
+    ).split(",")
+    if h.strip()
 ]
 
-# 可选环境变量覆盖 (默认留空, 直接走 CF 官方随机优选)
+# 优选 API 地址配置 (支持逗号分隔多个，可配置在 GitHub Action Secret / Env 中)
 OPTIMAL_API = os.environ.get("OPTIMAL_API", "")
 
 NODES_URL = os.environ.get("NODES_URL", "https://zf158338-eng.github.io/gate/nodes.txt")
@@ -272,100 +252,27 @@ def fetch_optimal_api_endpoints(api_urls_str):
             log("OPTIMAL API", f"拉取优选 API 失败 ({url}): {e}")
     return endpoints
 
-def fetch_cf_official_cidrs(session=None):
+def get_combined_edge_hosts():
     """
-    获取 Cloudflare 官方 Anycast IPv4 CIDR 列表:
-    1) 从 Cloudflare 官方 /client/v4/ips 获取权威 IPv4 网段
-    2) 拉取高可用边缘 CIDR 列表并与官方网段求交集, 确保 100% 为 CF 官方 IP 且避开易超时段
+    合并静态优选域名与优选 API 端点
     """
-    sess = session or requests.Session()
-    official_nets = []
-    try:
-        resp = sess.get(CF_OFFICIAL_IPS_API, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200:
-            cidrs = ((resp.json().get("result") or {}).get("ipv4_cidrs") or [])
-            official_nets = [ipaddress.ip_network(c.strip(), strict=False) for c in cidrs if c.strip()]
-            log("CF OFFICIAL", f"获取 Cloudflare 官方 IPv4 网段 {len(official_nets)} 个")
-    except Exception as e:
-        log("CF OFFICIAL", f"拉取官方 /ips 接口失败, 回退内置官方网段: {e}")
-    if not official_nets:
-        official_nets = [ipaddress.ip_network(c, strict=False) for c in FALLBACK_CF_OFFICIAL_IPS_V4]
-
-    candidate_nets = []
-    try:
-        resp = sess.get(CF_CIDR_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200:
-            for line in resp.text.splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                try:
-                    candidate_nets.append(ipaddress.ip_network(line, strict=False))
-                except ValueError:
-                    pass
-    except Exception as e:
-        log("CF OFFICIAL", f"拉取优选 CIDR 列表失败, 回退内置官方边缘段: {e}")
-
-    if not candidate_nets:
-        candidate_nets = [ipaddress.ip_network(c, strict=False) for c in FALLBACK_CF_ANYCAST_CIDRS]
-
-    verified = [
-        net for net in candidate_nets
-        if any(net.subnet_of(cf_net) or cf_net.subnet_of(net) for cf_net in official_nets)
-    ]
-    if not verified:
-        verified = [ipaddress.ip_network(c, strict=False) for c in FALLBACK_CF_ANYCAST_CIDRS]
-
-    log("CF OFFICIAL", f"经 CF 官方网段校验的随机优选 CIDR 共 {len(verified)} 个")
-    return verified
-
-
-def generate_cf_random_entries(count=32, session=None):
-    """从 CF 官方校验 CIDR 与官方 HTTPS 端口随机生成 IP:端口 入口"""
-    cidrs = fetch_cf_official_cidrs(session=session)
-    target = max(1, int(count))
-    entries = []
-    seen = set()
-    attempts = 0
-    max_attempts = target * 10
-    while len(entries) < target and attempts < max_attempts:
-        attempts += 1
-        net = random.choice(cidrs)
-        first = int(net.network_address)
-        last = int(net.broadcast_address)
-        if last - first >= 2:
-            first += 1
-            last -= 1
-        ip = str(ipaddress.IPv4Address(random.randint(first, last)))
-        port = random.choice(CF_HTTPS_PORTS)
-        entry = f"{ip}:{port}"
-        if entry not in seen:
-            seen.add(entry)
-            entries.append(entry)
-    return entries
-
-
-def get_combined_edge_hosts(needed_count=32, session=None):
-    """
-    默认使用 CF 官方随机优选 IP:端口; 仅当显式传入 HOSTS_ENTRY / OPTIMAL_API 时才额外合并
-    """
+    # 1. 优先读取 HOSTS_ENTRY 或 EDGE_HOSTS
     _entry = os.environ.get("HOSTS_ENTRY", "").strip()
-    custom_hosts = [e.strip() for e in _entry.split(",") if e.strip()] if _entry else []
-    api_hosts = fetch_optimal_api_endpoints(OPTIMAL_API) if OPTIMAL_API.strip() else []
+    static_hosts = [e.strip() for e in _entry.split(",") if e.strip()] if _entry else EDGE_HOSTS
 
-    if custom_hosts or api_hosts:
-        combined = []
-        seen = set()
-        for h in custom_hosts + api_hosts:
-            if h and h not in seen:
-                seen.add(h)
-                combined.append(h)
-        log("EDGE POOL", f"使用外部覆盖入口共 {len(combined)} 个")
-        return combined
+    # 2. 拉取优选 API 端点
+    api_hosts = fetch_optimal_api_endpoints(OPTIMAL_API)
 
-    cf_entries = generate_cf_random_entries(count=max(needed_count, 32), session=session)
-    log("EDGE POOL", f"CF 官方随机优选生成入口 {len(cf_entries)} 个 (示例: {cf_entries[:3]})")
-    return cf_entries
+    # 3. 合并与去重 (保留原始列表顺序)
+    combined = []
+    seen = set()
+    for h in static_hosts + api_hosts:
+        if h and h not in seen:
+            seen.add(h)
+            combined.append(h)
+
+    log("EDGE POOL", f"汇总入口地址池: 静态域名 {len(static_hosts)} 个, API 获取 {len(api_hosts)} 个, 合并有效入口共 {len(combined)} 个")
+    return combined if combined else EDGE_HOSTS
 
 # ---------------------------------------------------------------------------
 # 筛选 SSTP 节点
@@ -604,7 +511,7 @@ def main():
     log("RESULT", f"国家数量: {data['stats']['countries']}")
 
     # 动态拉取 API 并与静态优选域名混合
-    edge_hosts = get_combined_edge_hosts(needed_count=max(len(success), 32), session=session)
+    edge_hosts = get_combined_edge_hosts()
 
     data_path, html_path, nodes_path = write_outputs(data, edge_hosts)
     log("WEBSITE", f"生成 {os.path.relpath(data_path, REPO_DIR)}")
