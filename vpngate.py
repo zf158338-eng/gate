@@ -394,6 +394,7 @@ def to_sstp_nodes(rows):
             "sessions": r.get("sessions", 0),
             "uptime_h": r.get("uptime_h", 0.0),
             "total_users": r.get("total_users", 0),
+            "ovpn_b64": r.get("config_b64", ""),
         })
     return nodes
 
@@ -695,8 +696,45 @@ def build_nodes_text(data, edge_hosts):
     return "\n".join(lines) + "\n"
 
 
+def build_ovpn_pool(data, limit=30):
+    """Export top stable residential nodes with their client profile (ovpn_pool.json)."""
+    pool = []
+    seen_ip = set()
+    for n in data.get("available", []):
+        if n.get("residential") != "residential" or not n.get("ovpn_b64"):
+            continue
+        if n["ip"] in seen_ip:
+            continue
+        seen_ip.add(n["ip"])
+        code = str(n.get("country_code") or "?").upper()
+        pool.append({
+            "id": f"{code.lower()}-{n['ip']}",
+            "host": n["host"],
+            "ip": n["ip"],
+            "port": n["port"],
+            "country_code": code,
+            "country_zh": COUNTRY_ZH.get(code, code),
+            "org": (n.get("exit") or {}).get("org") or "",
+            "uptime_h": n.get("uptime_h"),
+            "speed_mbps": n.get("speed_mbps"),
+            "stability_score": n.get("stability_score"),
+            "ovpn_b64": n["ovpn_b64"],
+        })
+        if len(pool) >= limit:
+            break
+    return {"generated_at": data.get("generated_at"), "count": len(pool), "nodes": pool}
+
+
 def write_outputs(data, edge_hosts):
     os.makedirs(PUBLIC_DIR, exist_ok=True)
+    pool = build_ovpn_pool(data)
+    with open(os.path.join(PUBLIC_DIR, "ovpn_pool.json"), "w", encoding="utf-8") as f:
+        json.dump(pool, f, ensure_ascii=False)
+    for n in data.get("available", []):
+        n.pop("ovpn_b64", None)
+    for grp in data.get("countries", {}).values():
+        for n in grp.get("nodes", []):
+            n.pop("ovpn_b64", None)
     data_path = os.path.join(PUBLIC_DIR, "data.json")
     with open(data_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
